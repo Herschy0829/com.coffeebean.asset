@@ -1,0 +1,377 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using Object = UnityEngine.Object;
+
+namespace CoffeeBean
+{
+    /// <summary>
+    /// 资源加载门面（默认后端 Unity Addressables，可注入替换）：
+    /// - **统一缓存**：三字典（address → Object / 后端句柄 / 引用计数），缓存命中零开销
+    /// - **引用计数释放**：每次加载成功 +1（含缓存命中）；Release 归零才真正释放（防泄漏）
+    /// - **同步 / 异步**：LoadAsset / LoadAssetAsync（C# Task，对齐 net 模块约定）
+    /// - **批量 / 标签**：PreloadAsync / LoadAssetsByLabelAsync
+    /// - **实例化**：Instantiate / InstantiateAsync
+    /// - **统计**：缓存数 / 总引用数
+    ///
+    /// 依赖 com.unity.addressables（声明依赖，来源由消费工程提供）。
+    /// </summary>
+    public sealed class CAssetSystem : MonoBehaviour
+    {
+        private const string Tag = "CoffeeBean.Asset";
+        private const string ManagerName = "[CoffeeBean] CAssetSystem";
+
+        private static CAssetSystem _instance;
+
+        /// <summary>资源系统单例（自动创建，DontDestroyOnLoad；EditMode 测试不自动创建）。</summary>
+        public static CAssetSystem Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    _instance = FindObjectOfType<CAssetSystem>();
+                }
+                if (_instance == null && Application.isPlaying)
+                {
+                    var go = new GameObject(ManagerName);
+                    _instance = go.AddComponent<CAssetSystem>();
+                    DontDestroyOnLoad(go);
+                }
+                return _instance;
+            }
+        }
+
+        /// <summary>测试用：重置单例（EditMode 测试 TearDown 调用）。</summary>
+        public static void ResetInstanceForTest()
+        {
+            if (_instance != null)
+            {
+                if (Application.isPlaying) Destroy(_instance.gameObject);
+                else DestroyImmediate(_instance.gameObject);
+                _instance = null;
+            }
+        }
+
+        /// <summary>测试用：注入单例实例（EditMode 测试 SetUp 调用，跳过自动创建）。</summary>
+        internal static void SetInstanceForTest(CAssetSystem instance)
+        {
+            _instance = instance;
+        }
+
+        private readonly Dictionary<string, Object> _cache = new Dictionary<string, Object>();
+        private readonly Dictionary<string, int> _refCounts = new Dictionary<string, int>();
+
+        private CAssetOptions _options = new CAssetOptions();
+        private IAssetBackend _backend = new AddressablesAssetBackend();
+
+        /// <summary>模块配置（首次访问 Instance 前可设置）。</summary>
+        public CAssetOptions Options
+        {
+            get => _options;
+            set => _options = value ?? new CAssetOptions();
+        }
+
+        /// <summary>资源加载后端（默认 Addressables；测试注入 mock）。</summary>
+        public IAssetBackend Backend
+        {
+            get => _backend;
+            set => _backend = value ?? new AddressablesAssetBackend();
+        }
+
+        private void Awake()
+        {
+            if (_instance != null && _instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            _instance = this;
+        }
+
+        private void OnDestroy()
+        {
+            if (_instance == this) _instance = null;
+            ReleaseAll();
+        }
+
+        // ========== 缓存查询 ==========
+
+        /// <summary>资源是否已加载并缓存。</summary>
+        public bool IsLoaded(string address)
+            => !string.IsNullOrEmpty(address) && _cache.ContainsKey(address);
+
+        /// <summary>获取资源引用计数。</summary>
+        public int GetRefCount(string address)
+            => !string.IsNullOrEmpty(address) && _refCounts.TryGetValue(address, out var c) ? c : 0;
+
+        /// <summary>尝试从缓存获取（不增加引用计数，只读访问）。</summary>
+        public bool TryGetCached<T>(string address, out T asset) where T : Object
+        {
+            asset = null;
+            if (string.IsNullOrEmpty(address)) return false;
+            if (_cache.TryGetValue(address, out var cached) && cached is T result)
+            {
+                asset = result;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>统计：缓存数 / 总引用数。</summary>
+        public (int cacheCount, int totalRefCount) GetCacheStats()
+        {
+            int total = 0;
+            foreach (var kv in _refCounts) total += kv.Value;
+            return (_cache.Count, total);
+        }
+
+        // ========== 同步加载 ==========
+
+        /// <summary>同步加载资源（缓存命中零开销）。</summary>
+        public T LoadAsset<T>(string address) where T : Object
+        {
+            address = ResolveAddress(address);
+            if (string.IsNullOrEmpty(address))
+            {
+                LogFail($"地址为空 [{typeof(T).Name}]");
+                return null;
+            }
+
+            if (TryGetFromCache(address, out T cached)) return cached;
+
+            if (!_backend.HasAddress(address))
+            {
+                LogFail($"未找到资源：{address}");
+                return null;
+            }
+
+            var asset = _backend.LoadAssetSync<T>(address);
+            if (asset == null)
+            {
+                LogFail($"同步加载失败：{address}");
+                return null;
+            }
+
+            CacheAsset(address, asset);
+            return asset;
+        }
+
+        // ========== 异步加载 ==========
+
+        /// <summary>异步加载资源（C# Task；地址存在性检查 + 加载 + 缓存 + 引用计数）。</summary>
+        public async Task<T> LoadAssetAsync<T>(string address) where T : Object
+        {
+            address = ResolveAddress(address);
+            if (string.IsNullOrEmpty(address))
+            {
+                LogFail($"地址为空 [{typeof(T).Name}]");
+                return null;
+            }
+
+            if (TryGetFromCache(address, out T cached)) return cached;
+
+            bool exists = await _backend.HasAddressAsync(address);
+            if (!exists)
+            {
+                LogFail($"未找到资源：{address}");
+                return null;
+            }
+
+            var asset = await _backend.LoadAssetAsync<T>(address);
+            if (asset == null)
+            {
+                LogFail($"异步加载失败：{address}");
+                return null;
+            }
+
+            CacheAsset(address, asset);
+            return asset;
+        }
+
+        // ========== 标签 / 批量 ==========
+
+        /// <summary>按标签加载全部资源（默认后端支持；mock 可简化）。</summary>
+        public async Task<List<T>> LoadAssetsByLabelAsync<T>(string label) where T : Object
+        {
+            var result = new List<T>();
+            if (string.IsNullOrEmpty(label)) return result;
+
+            // 标签 → 地址集合（由后端解析；Addressables 后端用 LoadResourceLocationsAsync）
+            var addresses = await ResolveLabelAddresses(label).ConfigureAwait(false);
+            foreach (var addr in addresses)
+            {
+                var asset = await LoadAssetAsync<T>(addr).ConfigureAwait(false);
+                if (asset != null) result.Add(asset);
+            }
+            return result;
+        }
+
+        /// <summary>批量预加载（不阻塞，全部完成后返回）。</summary>
+        public async Task PreloadAsync(IEnumerable<string> addresses)
+        {
+            if (addresses == null) return;
+            var tasks = addresses.Select(a => LoadAssetAsync<Object>(a));
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+
+        // ========== 实例化 ==========
+
+        /// <summary>同步实例化 GameObject。</summary>
+        public GameObject Instantiate(string address, Transform parent = null, bool worldPosStays = false)
+        {
+            var prefab = LoadAsset<GameObject>(address);
+            if (prefab == null) return null;
+            var go = Object.Instantiate(prefab, parent, worldPosStays);
+            go.name = prefab.name;
+            return go;
+        }
+
+        /// <summary>异步实例化 GameObject。</summary>
+        public async Task<GameObject> InstantiateAsync(string address, Transform parent = null, bool worldPosStays = false)
+        {
+            var prefab = await LoadAssetAsync<GameObject>(address).ConfigureAwait(false);
+            if (prefab == null) return null;
+            var go = Object.Instantiate(prefab, parent, worldPosStays);
+            go.name = prefab.name;
+            return go;
+        }
+
+        // ========== 场景 ==========
+
+        /// <summary>异步加载场景（Addressables；mock 返回 default）。</summary>
+        public async Task<Scene> LoadSceneAsync(string address, LoadSceneMode mode = LoadSceneMode.Single, bool activateOnLoad = true)
+        {
+            // 场景加载仍直接走 Addressables（后端抽象暂不含场景）
+            var handle = UnityEngine.AddressableAssets.Addressables.LoadSceneAsync(address, mode, activateOnLoad);
+            await handle.Task.ConfigureAwait(false);
+            if (handle.Status != UnityEngine.ResourceManagement.AsyncOperations.AsyncOperationStatus.Succeeded)
+            {
+                LogFail($"场景加载失败：{address}");
+                return default;
+            }
+            return handle.Result.Scene;
+        }
+
+        // ========== 释放 ==========
+
+        /// <summary>按引用计数释放指定资源（计数 -1，归零释放）。</summary>
+        public void Release(string address)
+        {
+            address = ResolveAddress(address);
+            if (!_refCounts.ContainsKey(address)) return;
+
+            _refCounts[address]--;
+            if (_refCounts[address] <= 0)
+            {
+                ReleaseInternal(address);
+            }
+        }
+
+        /// <summary>强制释放（忽略引用计数）。</summary>
+        public void ForceRelease(string address)
+        {
+            address = ResolveAddress(address);
+            ReleaseInternal(address);
+        }
+
+        /// <summary>释放所有引用计数 ≤ 0 的闲置资源，返回释放数量。</summary>
+        public int ReleaseUnused()
+        {
+            var toRelease = _refCounts.Where(kv => kv.Value <= 0).Select(kv => kv.Key).ToList();
+            foreach (var addr in toRelease)
+            {
+                ReleaseInternal(addr);
+            }
+            if (toRelease.Count > 0)
+            {
+                CLog.Info(Tag, $"释放了 {toRelease.Count} 个闲置资源");
+            }
+            return toRelease.Count;
+        }
+
+        /// <summary>释放所有资源。</summary>
+        public void ReleaseAll()
+        {
+            foreach (var kv in _cache)
+            {
+                _backend.Release(kv.Key, kv.Value);
+            }
+            _cache.Clear();
+            _refCounts.Clear();
+            _backend.ReleaseAll();
+        }
+
+        // ========== 内部 ==========
+
+        private bool TryGetFromCache<T>(string address, out T result) where T : Object
+        {
+            result = null;
+            if (_cache.TryGetValue(address, out var cached) && cached is T res)
+            {
+                _refCounts[address]++;
+                result = res;
+                return true;
+            }
+            return false;
+        }
+
+        private void CacheAsset(string address, Object asset)
+        {
+            if (_cache.ContainsKey(address))
+            {
+                _refCounts[address]++;
+            }
+            else
+            {
+                _cache[address] = asset;
+                _refCounts[address] = 1;
+            }
+        }
+
+        private void ReleaseInternal(string address)
+        {
+            if (_cache.TryGetValue(address, out var asset))
+            {
+                _backend.Release(address, asset);
+            }
+            _cache.Remove(address);
+            _refCounts.Remove(address);
+        }
+
+        /// <summary>标签 → 地址集合（默认后端用 Addressables 解析）。</summary>
+        private async Task<List<string>> ResolveLabelAddresses(string label)
+        {
+            var result = new List<string>();
+            var locations = await UnityEngine.AddressableAssets.Addressables
+                .LoadResourceLocationsAsync(label).Task.ConfigureAwait(false);
+            if (locations == null) return result;
+            foreach (var loc in locations) result.Add(loc.PrimaryKey);
+            return result;
+        }
+
+        /// <summary>应用地址前缀。</summary>
+        private string ResolveAddress(string address)
+        {
+            if (string.IsNullOrEmpty(address)) return address;
+            if (string.IsNullOrEmpty(_options.AddressPrefix)) return address;
+            if (address.StartsWith(_options.AddressPrefix, StringComparison.Ordinal)) return address;
+            return _options.AddressPrefix + "/" + address;
+        }
+
+        private void LogFail(string message)
+        {
+            if (_options.FailSilently)
+            {
+                CLog.Warn(Tag, message);
+            }
+            else
+            {
+                CLog.Error(Tag, message);
+            }
+        }
+    }
+}

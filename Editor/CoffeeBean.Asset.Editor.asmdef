@@ -1,0 +1,20 @@
+{
+  "name": "CoffeeBean.Asset.Editor",
+  "rootNamespace": "CoffeeBean.EditorTools",
+  "references": [
+    "CoffeeBean.Tools",
+    "CoffeeBean.Asset",
+    "Unity.Addressables.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

@@ -1,0 +1,4 @@
+﻿<linker>
+  <!-- CoffeeBean.Asset：防止 Addressables 加载的类型被 IL2CPP 裁剪 -->
+  <assembly fullname="CoffeeBean.Asset" preserve="all" />
+</linker>

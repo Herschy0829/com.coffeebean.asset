@@ -1,0 +1,19 @@
+{
+  "name": "CoffeeBean.Asset.Demo",
+  "rootNamespace": "CoffeeBean.Asset.Demo",
+  "references": [
+    "CoffeeBean.Tools",
+    "CoffeeBean.Asset",
+    "Unity.Addressables",
+    "Unity.ResourceManager"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

@@ -1,0 +1,26 @@
+{
+  "name": "CoffeeBean.Asset.Tests",
+  "rootNamespace": "CoffeeBean.Asset.Tests",
+  "references": [
+    "CoffeeBean.Tools",
+    "CoffeeBean.Asset",
+    "CoffeeBean.Asset.Editor",
+    "Unity.Addressables",
+    "Unity.ResourceManager",
+    "Unity.Addressables.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}
