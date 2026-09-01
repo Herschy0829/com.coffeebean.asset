@@ -18,14 +18,6 @@ namespace CoffeeBean.EditorTools
             EditorApplication.delayCall += EnsureSettings;
         }
 
-        /// <summary>菜单：手动确保 Addressables 设置存在。</summary>
-        [MenuItem("Window/CoffeeBean/Asset/确保 Addressables 设置")]
-        public static void EnsureSettingsMenu()
-        {
-            EnsureSettings();
-            AssetDatabase.Refresh();
-        }
-
         /// <summary>确保 AddressableAssetSettings 存在（没有则创建默认）。</summary>
         public static void EnsureSettings()
         {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2] - 2026-08-28
+
+
+### Changed
+- **移除 Window/CoffeeBean 子菜单项**（避免子菜单抢占 Hub 主入口）：Addressables 设置改为独立窗口 + CoffeeBeanToolAttribute 注册进 Hub 导航
+
+# Changelog
+
 ## [0.1.1] - 2026-08-28
 
 
