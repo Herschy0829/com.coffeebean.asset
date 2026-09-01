@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1] - 2026-08-28
+
+
+### Changed
+- InternalsVisibleTo 增加 CoffeeBean.UI.Tests（ui 模块 CAssetPanelLoader 测试复用 asset 测试注入）
+
+# Changelog
+
 ## [0.1.0] - 2026-08-28
 
 ### Added
