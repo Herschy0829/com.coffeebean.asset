@@ -160,5 +160,62 @@ namespace CoffeeBean.Asset.Tests
             Assert.IsFalse(CAssetSystem.Instance.IsLoaded(TextureAddress));
             Assert.AreEqual(1, Backend.ReleaseAllCount, "应调用后端 ReleaseAll");
         }
+
+        // ========== Pin / Unpin（常驻资源） ==========
+
+        [Test]
+        public void Pin_LoadsAndMarksResident()
+        {
+            var asset = CAssetSystem.Instance.Pin<Sprite>(TextureAddress);
+
+            Assert.IsNotNull(asset, "Pin 应加载资源");
+            Assert.IsTrue(CAssetSystem.Instance.IsPinned(TextureAddress), "Pin 后应标记常驻");
+        }
+
+        [Test]
+        public void ReleaseUnused_SkipsPinned()
+        {
+            CAssetSystem.Instance.LoadAsset<Sprite>(TextureAddress);
+            CAssetSystem.Instance.Release(TextureAddress); // 计数归零
+
+            CAssetSystem.Instance.Pin<Sprite>(TextureAddress); // 常驻
+
+            int released = CAssetSystem.Instance.ReleaseUnused();
+            Assert.AreEqual(0, released, "常驻资源不应被闲置清理");
+            Assert.IsTrue(CAssetSystem.Instance.IsLoaded(TextureAddress), "常驻资源应保留");
+        }
+
+        [Test]
+        public void Release_OnPinned_DoesNotFree()
+        {
+            CAssetSystem.Instance.Pin<Sprite>(TextureAddress);
+            CAssetSystem.Instance.Release(TextureAddress); // 计数归零但常驻
+
+            Assert.IsTrue(CAssetSystem.Instance.IsLoaded(TextureAddress), "常驻资源 Release 归零不应释放");
+        }
+
+        [Test]
+        public void Unpin_ThenReleaseUnused_Frees()
+        {
+            CAssetSystem.Instance.Pin<Sprite>(TextureAddress);
+            CAssetSystem.Instance.Release(TextureAddress);
+            CAssetSystem.Instance.Unpin(TextureAddress);
+
+            Assert.IsFalse(CAssetSystem.Instance.IsPinned(TextureAddress), "Unpin 应解除常驻");
+            int released = CAssetSystem.Instance.ReleaseUnused();
+            Assert.AreEqual(1, released, "Unpin 后应可被闲置清理");
+            Assert.IsFalse(CAssetSystem.Instance.IsLoaded(TextureAddress));
+        }
+
+        [Test]
+        public void ForceRelease_ReleasesPinned()
+        {
+            CAssetSystem.Instance.Pin<Sprite>(TextureAddress);
+
+            CAssetSystem.Instance.ForceRelease(TextureAddress);
+
+            Assert.IsFalse(CAssetSystem.Instance.IsPinned(TextureAddress), "ForceRelease 应解除常驻");
+            Assert.IsFalse(CAssetSystem.Instance.IsLoaded(TextureAddress));
+        }
     }
 }

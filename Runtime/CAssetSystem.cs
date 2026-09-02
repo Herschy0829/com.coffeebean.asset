@@ -64,6 +64,7 @@ namespace CoffeeBean
 
         private readonly Dictionary<string, Object> _cache = new Dictionary<string, Object>();
         private readonly Dictionary<string, int> _refCounts = new Dictionary<string, int>();
+        private readonly HashSet<string> _pinned = new HashSet<string>();
 
         private CAssetOptions _options = new CAssetOptions();
         private IAssetBackend _backend = new AddressablesAssetBackend();
@@ -258,7 +259,7 @@ namespace CoffeeBean
 
         // ========== 释放 ==========
 
-        /// <summary>按引用计数释放指定资源（计数 -1，归零释放）。</summary>
+        /// <summary>按引用计数释放指定资源（计数 -1，归零释放；常驻资源不释放）。</summary>
         public void Release(string address)
         {
             address = ResolveAddress(address);
@@ -267,21 +268,29 @@ namespace CoffeeBean
             _refCounts[address]--;
             if (_refCounts[address] <= 0)
             {
-                ReleaseInternal(address);
+                // 常驻资源（Pin）不被 Release 归零释放，直到 Unpin
+                if (!_pinned.Contains(address))
+                {
+                    ReleaseInternal(address);
+                }
             }
         }
 
-        /// <summary>强制释放（忽略引用计数）。</summary>
+        /// <summary>强制释放（忽略引用计数；常驻资源也强制释放并解除常驻）。</summary>
         public void ForceRelease(string address)
         {
             address = ResolveAddress(address);
+            _pinned.Remove(address);
             ReleaseInternal(address);
         }
 
-        /// <summary>释放所有引用计数 ≤ 0 的闲置资源，返回释放数量。</summary>
+        /// <summary>释放所有引用计数 ≤ 0 的闲置资源，返回释放数量（常驻资源跳过）。</summary>
         public int ReleaseUnused()
         {
-            var toRelease = _refCounts.Where(kv => kv.Value <= 0).Select(kv => kv.Key).ToList();
+            var toRelease = _refCounts
+                .Where(kv => kv.Value <= 0 && !_pinned.Contains(kv.Key))
+                .Select(kv => kv.Key)
+                .ToList();
             foreach (var addr in toRelease)
             {
                 ReleaseInternal(addr);
@@ -291,6 +300,29 @@ namespace CoffeeBean
                 CLog.Info(Tag, $"释放了 {toRelease.Count} 个闲置资源");
             }
             return toRelease.Count;
+        }
+
+        /// <summary>资源是否常驻（Pin 中）。</summary>
+        public bool IsPinned(string address)
+            => !string.IsNullOrEmpty(address) && _pinned.Contains(address);
+
+        /// <summary>
+        /// 常驻资源：加载并标记为不被闲置清理/Release 释放（如常驻字体、全局图标）。
+        /// 返回资源；加载失败返回 null。
+        /// </summary>
+        public T Pin<T>(string address) where T : Object
+        {
+            address = ResolveAddress(address);
+            T asset = LoadAsset<T>(address);
+            if (asset != null) _pinned.Add(address);
+            return asset;
+        }
+
+        /// <summary>解除常驻（之后 Release 归零或 ReleaseUnused 可释放）。</summary>
+        public void Unpin(string address)
+        {
+            address = ResolveAddress(address);
+            _pinned.Remove(address);
         }
 
         /// <summary>释放所有资源。</summary>

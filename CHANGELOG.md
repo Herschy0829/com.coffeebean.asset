@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0] - 2026-08-28
+
+
+### Added
+- **Pin / Unpin 常驻资源**：CAssetSystem.Pin 加载并标记常驻（ReleaseUnused/Release 归零不清理），Unpin 解除；ForceRelease 强制释放并解除
+
+# Changelog
+
 ## [0.1.2] - 2026-08-28
 
 
