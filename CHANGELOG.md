@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] - 2026-08-28
+
+
+### Added
+- **CAutoRelease 组件自动释放钩子**：登记已加载资源地址，组件销毁时自动 CAssetSystem.Release（防泄漏）；TrackRelease 便捷扩展
+
+# Changelog
+
 ## [0.2.0] - 2026-08-28
 
 
