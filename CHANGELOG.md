@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2] - 2026-08-28
+
+
+### Added
+- **资源依赖分析工具**（CAssetDependencyWindow）：选择资源查看正向依赖与被引用（反向依赖），注册进 CoffeeBean Hub（Asset 分类）
+
+# Changelog
+
 ## [0.2.1] - 2026-08-28
 
 
