@@ -15,7 +15,7 @@ CoffeeBean 框架的资源管理模块：**统一封装 Unity Addressables**。
 ```json
 {
   "dependencies": {
-    "com.coffeebean.asset": "https://github.com/Herschy0829/com.coffeebean.asset.git#v0.1.0",
+    "com.coffeebean.asset": "https://github.com/Herschy0829/com.coffeebean.asset.git#v0.2.3",
     "com.coffeebean.tools": "https://github.com/Herschy0829/com.coffeebean.tools.git#v0.5.0",
     "com.unity.addressables": "2.9.1"  // 或本地副本；来源消费方定
   }

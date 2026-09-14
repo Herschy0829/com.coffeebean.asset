@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3] - 2026-09-14
+
+### Fixed
+- **`Runtime/Bridge/Bridge.cs` 声明的模块版本与 `package.json` 不一致**：Bridge 里写的是 `0.1.0`，
+  而 `package.json` 已经到 `0.2.2`（落后两个版本）。`CoffeeBeanModule` 特性的 Version 是 Core 运行期
+  做 `MinCoreVersion` 兼容校验、Hub 显示与模块清单的唯一来源，因此消费工程看到的 asset 版本一直是错的
+  `0.1.0` —— 这既违反模板契约（`templates/module/PLACEHOLDERS.md` §2 要求两处必须一致），
+  也让"模块版本"这一列失去可信度。现已对齐为 `0.2.3`。
+- README 安装示例的 tag 由严重过期的 `v0.1.0` 修正为 `v0.2.3`。
+
 ## [0.2.2] - 2026-08-28
 
 
