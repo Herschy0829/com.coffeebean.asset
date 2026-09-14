@@ -8,9 +8,6 @@ namespace CoffeeBean
     /// </summary>
     public sealed class CAssetOptions
     {
-        /// <summary>首次访问是否自动初始化 Addressables（默认 true）。</summary>
-        public bool AutoInitialize = true;
-
         /// <summary>加载失败仅告警不抛错（默认 true）。</summary>
         public bool FailSilently = true;
 

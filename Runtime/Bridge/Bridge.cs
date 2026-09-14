@@ -3,7 +3,7 @@ using CoffeeBean;
 
 [assembly: CoffeeBeanModule(
     "com.coffeebean.asset",
-    "0.2.3",
+    "0.3.0",
     DisplayName = "Asset",
     Description = "Asset management: Addressables facade (CAssetSystem), UI binding extensions, catalog updater.",
     Dependencies = new[] { "com.coffeebean.core", "com.coffeebean.tools" }
