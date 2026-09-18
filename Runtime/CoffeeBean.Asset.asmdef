@@ -3,6 +3,8 @@
   "rootNamespace": "CoffeeBean",
   "references": [
     "CoffeeBean.Tools",
+    "UniTask",
+    "UniTask.Addressables",
     "Unity.Addressables",
     "Unity.ResourceManager",
     "Unity.TextMeshPro"

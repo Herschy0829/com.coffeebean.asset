@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.4.0] - 2026-09-17
+
+### Changed (BREAKING：异步返回类型 Task → UniTask)
+- **资源管理的异步面全部改用 UniTask**（`IAssetBackend` / `CAssetSystem` / `CAssetExtensions` /
+  `CCatalogUpdater`）。这是有意为之的取舍，理由写在下面，不是"跟风换库"。
+
+  **调用方基本不用改**：`await CAssetSystem.Instance.LoadAssetAsync<Sprite>(addr)` 写法不变
+  （UniTask 有 `GetAwaiter()`，任何 `await` 都能直接接）。要改的只有显式写了
+  `Task<T>` 类型、`.ConfigureAwait(false)`、`Task.WhenAll`、`.GetAwaiter().GetResult()` 的地方。
+
+  **为什么换**（`Task` 那条路每次 await 都要额外付，而且付在一个危险的地方）：
+
+  | | `await handle.Task`（旧） | `await handle.ToUniTask()`（新） |
+  |---|---|---|
+  | 每次操作的分配 | 每个句柄 new `TaskCompletionSource<T>(RunContinuationsAsynchronously)`，**实测 ~104 B** | 等待源**池化**，预热后基本 0 |
+  | 恢复调度 | 经调度器/线程池排队；不写 `ConfigureAwait(false)` 还要过 `UnitySynchronizationContext` | `PlayerLoop` 驱动，**直接在 Unity 主线程恢复** |
+  | 主线程亲和性 | **不保证** | 保证 |
+  | 取消 | 无 | `ToUniTask(cancellationToken:)` |
+
+  旧实现里 `ConfigureAwait(false)` 会把续体丢到线程池，而 `InstantiateAsync` 紧接着调用
+  `Object.Instantiate` —— 那是一次**潜在的主线程违规**（mock 后端同步完成所以测试没暴露）。
+  现在 `InstantiateAsync` / `LoadSceneAsync` / `LoadTmpFontAsync` 在碰 Unity API 前显式
+  `UniTask.SwitchToMainThread()`（已经在主线程时**立即完成**，不额外吃一帧）。
+
+  **代价（说清楚）**：`com.cysharp.unitask` 成为本模块的**硬依赖**；对"一次加载几百个资源"
+  的场景收益明显（GC 峰值与主线程排队都降下来），对"偶尔加载一个大资源"基本看不出来 ——
+  后者本来就被 I/O 与反序列化支配。
+
+- **一次性真实加载的分配**：`LoadAssetsByLabelAsync` / `PreloadAsync` 不再用 `ConfigureAwait(false)`
+  与 `Task.WhenAll`（后者恒定分配数组 + 组合任务）。
+- Addressables 句柄一律走 `ToUniTask()`，不再经过 `handle.Task`。
+
+### Added
+- `package.json` 声明 `com.cysharp.unitask: 2.5.11`；asmdef 显式引用 `UniTask` / `UniTask.Addressables`
+  （不靠 auto-reference，消费工程关掉它也不会断）。
+- `Tests/CAssetAsyncSurfaceTests.cs`：**锁住"异步面是 UniTask"这个决定** —— 公开方法返回
+  `Task<T>` 会立刻红（含 `IAssetBackend` 契约与扩展方法）。
+
+### Tests
+- `MockAssetBackend` 改用 `UniTask.CompletedTask`（同步完成、不切线程、不需要 PlayerLoop，
+  所以 EditMode 下不会挂在"没有 PlayerLoop 可泵"上）。
+- asset 模块测试 27 → 31（新增 4 条异步面回归锁）。全量 EditMode **690 → 699**
+  （698 通过 + 1 跳过；跳过的那条是 tools 里"未集成时才可空操作"的用例 ——
+  dev 工程现在被强制依赖装上了 UniRx/UniTask，它的前置条件不再成立，按设计自跳过）。
+
 ## [0.3.0] - 2026-09-14
 
 ### Removed (BREAKING)

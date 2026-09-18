@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
@@ -12,12 +12,20 @@ namespace CoffeeBean
     /// 资源加载门面（默认后端 Unity Addressables，可注入替换）：
     /// - **统一缓存**：三字典（address → Object / 后端句柄 / 引用计数），缓存命中零开销
     /// - **引用计数释放**：每次加载成功 +1（含缓存命中）；Release 归零才真正释放（防泄漏）
-    /// - **同步 / 异步**：LoadAsset / LoadAssetAsync（C# Task，对齐 net 模块约定）
+    /// - **同步 / 异步**：LoadAsset / LoadAssetAsync（异步统一用 **UniTask**）
     /// - **批量 / 标签**：PreloadAsync / LoadAssetsByLabelAsync
     /// - **实例化**：Instantiate / InstantiateAsync
     /// - **统计**：缓存数 / 总引用数
     ///
-    /// 依赖 com.unity.addressables（声明依赖，来源由消费工程提供）。
+    /// 为什么是 UniTask 而不是 C# Task：一次真实加载的开销几乎全在 I/O 与反序列化上，
+    /// 但 Task 那条路**每次 await 还要额外付**——Addressables 的 <c>handle.Task</c> 每个句柄
+    /// new 一个 <c>TaskCompletionSource&lt;T&gt;(RunContinuationsAsynchronously)</c>（实测 ~104 B）
+    /// 并经调度器排队；更麻烦的是续体**不保证回到 Unity 主线程**
+    /// （旧实现里 <c>ConfigureAwait(false)</c> 会把续体丢到线程池，紧接着 <c>Object.Instantiate</c>
+    /// 就是一次潜在的主线程违规）。UniTask 的等待源是池化的、按 PlayerLoop 在主线程恢复，
+    /// 顺带还能取消。**调用方写法不变**：<c>await LoadAssetAsync&lt;T&gt;(addr)</c> 照旧。
+    ///
+    /// 依赖 com.unity.addressables 与 com.cysharp.unitask（声明依赖，来源由消费工程提供）。
     /// </summary>
     public sealed class CAssetSystem : MonoBehaviour
     {
@@ -163,8 +171,8 @@ namespace CoffeeBean
 
         // ========== 异步加载 ==========
 
-        /// <summary>异步加载资源（C# Task；地址存在性检查 + 加载 + 缓存 + 引用计数）。</summary>
-        public async Task<T> LoadAssetAsync<T>(string address) where T : Object
+        /// <summary>异步加载资源（UniTask；地址存在性检查 + 加载 + 缓存 + 引用计数）。</summary>
+        public async UniTask<T> LoadAssetAsync<T>(string address) where T : Object
         {
             address = ResolveAddress(address);
             if (string.IsNullOrEmpty(address))
@@ -183,6 +191,9 @@ namespace CoffeeBean
             }
 
             var asset = await _backend.LoadAssetAsync<T>(address);
+            // 保证调用方（以及后续碰 Unity API 的扩展方法/实例化）一定在主线程 ——
+            // 已在主线程时这里是**立即完成**的，不产生额外一帧，也不依赖 PlayerLoop。
+            await UniTask.SwitchToMainThread();
             if (asset == null)
             {
                 LogFail($"异步加载失败：{address}");
@@ -196,27 +207,30 @@ namespace CoffeeBean
         // ========== 标签 / 批量 ==========
 
         /// <summary>按标签加载全部资源（默认后端支持；mock 可简化）。</summary>
-        public async Task<List<T>> LoadAssetsByLabelAsync<T>(string label) where T : Object
+        public async UniTask<List<T>> LoadAssetsByLabelAsync<T>(string label) where T : Object
         {
             var result = new List<T>();
             if (string.IsNullOrEmpty(label)) return result;
 
             // 标签 → 地址集合（由后端解析；Addressables 后端用 LoadResourceLocationsAsync）
-            var addresses = await ResolveLabelAddresses(label).ConfigureAwait(false);
+            var addresses = await ResolveLabelAddresses(label);
+            await UniTask.SwitchToMainThread();
             foreach (var addr in addresses)
             {
-                var asset = await LoadAssetAsync<T>(addr).ConfigureAwait(false);
+                var asset = await LoadAssetAsync<T>(addr);
                 if (asset != null) result.Add(asset);
             }
             return result;
         }
 
         /// <summary>批量预加载（不阻塞，全部完成后返回）。</summary>
-        public async Task PreloadAsync(IEnumerable<string> addresses)
+        public async UniTask PreloadAsync(IEnumerable<string> addresses)
         {
             if (addresses == null) return;
-            var tasks = addresses.Select(a => LoadAssetAsync<Object>(a));
-            await Task.WhenAll(tasks).ConfigureAwait(false);
+            // UniTask.WhenAll 只在有多个任务时才付分配（单个直接返回），不像 Task.WhenAll 恒定分配数组+组合任务
+            var tasks = addresses.Select(a => LoadAssetAsync<Object>(a)).ToArray();
+            if (tasks.Length == 0) return;
+            await UniTask.WhenAll(tasks);
         }
 
         // ========== 实例化 ==========
@@ -232,9 +246,12 @@ namespace CoffeeBean
         }
 
         /// <summary>异步实例化 GameObject。</summary>
-        public async Task<GameObject> InstantiateAsync(string address, Transform parent = null, bool worldPosStays = false)
+        public async UniTask<GameObject> InstantiateAsync(string address, Transform parent = null, bool worldPosStays = false)
         {
-            var prefab = await LoadAssetAsync<GameObject>(address).ConfigureAwait(false);
+            var prefab = await LoadAssetAsync<GameObject>(address);
+            // Object.Instantiate 是主线程 API —— 显式收口（旧实现 ConfigureAwait(false) 后可能已经在
+            // 线程池上，这里就是一次真实的"主线程违规"隐患）
+            await UniTask.SwitchToMainThread();
             if (prefab == null) return null;
             var go = Object.Instantiate(prefab, parent, worldPosStays);
             go.name = prefab.name;
@@ -244,11 +261,12 @@ namespace CoffeeBean
         // ========== 场景 ==========
 
         /// <summary>异步加载场景（Addressables；mock 返回 default）。</summary>
-        public async Task<Scene> LoadSceneAsync(string address, LoadSceneMode mode = LoadSceneMode.Single, bool activateOnLoad = true)
+        public async UniTask<Scene> LoadSceneAsync(string address, LoadSceneMode mode = LoadSceneMode.Single, bool activateOnLoad = true)
         {
             // 场景加载仍直接走 Addressables（后端抽象暂不含场景）
             var handle = UnityEngine.AddressableAssets.Addressables.LoadSceneAsync(address, mode, activateOnLoad);
-            await handle.Task.ConfigureAwait(false);
+            await handle.ToUniTask();
+            await UniTask.SwitchToMainThread();
             if (handle.Status != UnityEngine.ResourceManagement.AsyncOperations.AsyncOperationStatus.Succeeded)
             {
                 LogFail($"场景加载失败：{address}");
@@ -375,11 +393,11 @@ namespace CoffeeBean
         }
 
         /// <summary>标签 → 地址集合（默认后端用 Addressables 解析）。</summary>
-        private async Task<List<string>> ResolveLabelAddresses(string label)
+        private async UniTask<List<string>> ResolveLabelAddresses(string label)
         {
             var result = new List<string>();
             var locations = await UnityEngine.AddressableAssets.Addressables
-                .LoadResourceLocationsAsync(label).Task.ConfigureAwait(false);
+                .LoadResourceLocationsAsync(label).ToUniTask();
             if (locations == null) return result;
             foreach (var loc in locations) result.Add(loc.PrimaryKey);
             return result;

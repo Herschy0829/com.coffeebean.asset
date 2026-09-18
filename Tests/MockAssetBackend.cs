@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -27,9 +27,9 @@ namespace CoffeeBean.Asset.Tests
 
         public bool HasAddress(string address) => _assets.ContainsKey(address);
 
-        public async Task<bool> HasAddressAsync(string address)
+        public async UniTask<bool> HasAddressAsync(string address)
         {
-            await Task.CompletedTask;
+            await UniTask.CompletedTask;
             return _assets.ContainsKey(address);
         }
 
@@ -41,10 +41,12 @@ namespace CoffeeBean.Asset.Tests
             return t;
         }
 
-        public async Task<T> LoadAssetAsync<T>(string address) where T : Object
+        public async UniTask<T> LoadAssetAsync<T>(string address) where T : Object
         {
             LoadAsyncCount++;
-            await Task.CompletedTask; // 保持主线程（EditMode 测试无同步上下文，Task.Yield 会切线程池）
+            // 同步完成（UniTask.CompletedTask 不切线程、不需要 PlayerLoop）——
+            // EditMode 下没有 PlayerLoop 可泵，任何真会让帧的等待都会挂住测试
+            await UniTask.CompletedTask;
             if (!_assets.TryGetValue(address, out var asset) || !(asset is T t)) return null;
             _loaded.Add(address);
             return t;

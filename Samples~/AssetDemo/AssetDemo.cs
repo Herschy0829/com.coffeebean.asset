@@ -49,7 +49,7 @@ namespace CoffeeBean.Asset.Demo
             GUILayout.Space(8);
             GUILayout.Label("说明：");
             GUILayout.Label("· 每次加载成功引用计数 +1（含缓存命中），Release 归零才真正释放；");
-            GUILayout.Label("· 异步 API（LoadAssetAsync/InstantiateAsync/PreloadAsync）基于 C# Task；");
+            GUILayout.Label("· 异步 API（LoadAssetAsync/InstantiateAsync/PreloadAsync）基于 UniTask（await 写法不变）；");
             GUILayout.Label("· 组件绑定：Image.LoadSprite(address) / TMP_Text.LoadFont(address) 等扩展；");
             GUILayout.Label("· 更新下载：new CCatalogUpdater().UpdateAsync(progress) 检测并下载新内容。");
             GUILayout.Label($"\n{_status}");

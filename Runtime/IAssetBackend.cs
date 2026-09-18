@@ -1,4 +1,4 @@
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
@@ -8,6 +8,12 @@ namespace CoffeeBean
     /// <summary>
     /// 资源加载后端抽象（默认 Addressables；测试可注入 mock，未来可接其他方案）。
     /// CAssetSystem 的缓存/引用计数/释放语义与后端解耦。
+    ///
+    /// 异步统一用 <see cref="UniTask"/>（不是 C# Task）：
+    /// · 等待源池化 —— 预热后每次操作**不再分配** TaskCompletionSource/Task；
+    /// · 按 PlayerLoop 在**主线程**恢复 —— 不经过 SynchronizationContext，
+    ///   也就没有"ConfigureAwait(false) 把续体丢到线程池、之后再碰 Unity API 就炸"的老问题；
+    /// · 顺带拿到取消能力（<c>ToUniTask(cancellationToken:)</c>）。
     /// </summary>
     public interface IAssetBackend
     {
@@ -15,13 +21,13 @@ namespace CoffeeBean
         T LoadAssetSync<T>(string address) where T : Object;
 
         /// <summary>异步加载资源。</summary>
-        Task<T> LoadAssetAsync<T>(string address) where T : Object;
+        UniTask<T> LoadAssetAsync<T>(string address) where T : Object;
 
         /// <summary>地址是否存在（同步）。</summary>
         bool HasAddress(string address);
 
         /// <summary>地址是否存在（异步）。</summary>
-        Task<bool> HasAddressAsync(string address);
+        UniTask<bool> HasAddressAsync(string address);
 
         /// <summary>释放资源句柄。</summary>
         void Release(string address, Object asset);
@@ -49,10 +55,13 @@ namespace CoffeeBean
             return handle.Result;
         }
 
-        public async Task<T> LoadAssetAsync<T>(string address) where T : Object
+        public async UniTask<T> LoadAssetAsync<T>(string address) where T : Object
         {
             var handle = Addressables.LoadAssetAsync<T>(address);
-            await handle.Task.ConfigureAwait(false);
+            // 直接等句柄（ToUniTask = 池化等待源 + PlayerLoop 主线程恢复），
+            // **不要**走 handle.Task：那条路每个句柄都会 new TaskCompletionSource<T>(RunContinuationsAsynchronously)
+            // 并经过调度器排队，且续体不保证在 Unity 主线程上（旧实现用 ConfigureAwait(false) 把续体丢到线程池）。
+            await handle.ToUniTask();
             if (handle.Status != AsyncOperationStatus.Succeeded)
             {
                 Addressables.Release(handle);
@@ -72,10 +81,10 @@ namespace CoffeeBean
             return exists;
         }
 
-        public async Task<bool> HasAddressAsync(string address)
+        public async UniTask<bool> HasAddressAsync(string address)
         {
             var handle = Addressables.LoadResourceLocationsAsync(address, typeof(Object));
-            await handle.Task;
+            await handle.ToUniTask();
             bool exists = handle.Status == AsyncOperationStatus.Succeeded
                           && handle.Result != null && handle.Result.Count > 0;
             Addressables.Release(handle);

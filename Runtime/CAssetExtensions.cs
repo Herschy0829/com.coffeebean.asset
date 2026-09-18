@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -24,7 +24,7 @@ namespace CoffeeBean
         }
 
         /// <summary>异步加载 Sprite 并赋值（Image）。</summary>
-        public static async Task LoadSpriteAsync(this Image image, string address)
+        public static async UniTask LoadSpriteAsync(this Image image, string address)
         {
             if (image == null) return;
             var sprite = await CAssetSystem.Instance.LoadAssetAsync<Sprite>(address);
@@ -39,7 +39,7 @@ namespace CoffeeBean
         }
 
         /// <summary>异步加载 Sprite 并赋值（Button 内 Image）。</summary>
-        public static async Task LoadSpriteAsync(this Button button, string address)
+        public static async UniTask LoadSpriteAsync(this Button button, string address)
         {
             if (button == null) return;
             var image = button.GetComponent<Image>();
@@ -66,7 +66,7 @@ namespace CoffeeBean
         }
 
         /// <summary>异步加载 Font 并生成 TMP_FontAsset。</summary>
-        public static async Task LoadFontAsync(this TMP_Text tmpText, string address)
+        public static async UniTask LoadFontAsync(this TMP_Text tmpText, string address)
         {
             if (tmpText == null) return;
             var fontAsset = await LoadTmpFontAsync(address);
@@ -92,7 +92,7 @@ namespace CoffeeBean
         }
 
         /// <summary>异步生成 TMP 字体（缓存复用）。</summary>
-        public static async Task<TMP_FontAsset> LoadTmpFontAsync(string address)
+        public static async UniTask<TMP_FontAsset> LoadTmpFontAsync(string address)
         {
             if (string.IsNullOrEmpty(address)) return null;
             if (FontCache.TryGetValue(address, out var cached)) return cached;
@@ -100,6 +100,8 @@ namespace CoffeeBean
             var font = await CAssetSystem.Instance.LoadAssetAsync<Font>(address);
             if (font == null) return null;
 
+            // TMP_FontAsset.CreateFontAsset 会建 Unity 对象 —— 显式收口到主线程
+            await UniTask.SwitchToMainThread();
             var opt = CAssetSystem.Instance.Options;
             var fontAsset = TMP_FontAsset.CreateFontAsset(
                 font, opt.FontSamplingPointSize, opt.FontPadding, opt.FontRenderMode,
@@ -130,7 +132,7 @@ namespace CoffeeBean
         }
 
         /// <summary>异步加载 Font 并赋值（原生 Text）。</summary>
-        public static async Task LoadFontAsync(this Text text, string address)
+        public static async UniTask LoadFontAsync(this Text text, string address)
         {
             if (text == null) return;
             var font = await CAssetSystem.Instance.LoadAssetAsync<Font>(address);
@@ -148,7 +150,7 @@ namespace CoffeeBean
         }
 
         /// <summary>异步加载 AudioClip 并赋值（AudioSource）。</summary>
-        public static async Task LoadClipAsync(this AudioSource source, string address)
+        public static async UniTask LoadClipAsync(this AudioSource source, string address)
         {
             if (source == null) return;
             var clip = await CAssetSystem.Instance.LoadAssetAsync<AudioClip>(address);

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.AddressableAssets.ResourceLocators;
@@ -12,6 +12,9 @@ namespace CoffeeBean
     /// <summary>
     /// 资源更新下载服务（对齐 Idle CheckUpdateAndDownload 的能力，做成可复用服务）：
     /// 检测 catalog 更新 → 更新 catalog → 计算下载大小 → 下载（进度回调）→ 成功/失败（可重试）。
+    ///
+    /// 全程 UniTask：句柄用 <c>ToUniTask()</c>（池化等待源 + 主线程恢复），
+    /// 延时/让帧用 <c>UniTask.Delay</c> / <c>UniTask.Yield</c>。
     /// </summary>
     public sealed class CCatalogUpdater
     {
@@ -32,21 +35,24 @@ namespace CoffeeBean
         /// <param name="progress">下载进度回调（0~1）。</param>
         /// <param name="token">取消令牌。</param>
         /// <returns>是否有更新且下载完成；false = 无更新 / 失败 / 已取消。</returns>
-        public async Task<bool> UpdateAsync(IProgress<float> progress = null, CancellationToken token = default)
+        public async UniTask<bool> UpdateAsync(IProgress<float> progress = null, CancellationToken token = default)
         {
+            // Addressables 的 API 是主线程 API：入口先收口一次
+            await UniTask.SwitchToMainThread(token);
+
             for (int attempt = 0; attempt <= MaxRetry; attempt++)
             {
                 if (token.IsCancellationRequested) return false;
-                bool ok = await TryUpdateOnce(progress, token).ConfigureAwait(false);
+                bool ok = await TryUpdateOnce(progress, token);
                 if (ok) return true;
                 if (attempt < MaxRetry)
                 {
                     CLog.Warn(Tag, $"更新失败，{RetryIntervalSeconds}s 后重试（{attempt + 1}/{MaxRetry}）");
                     try
                     {
-                        await Task.Delay((int)(RetryIntervalSeconds * 1000), token).ConfigureAwait(false);
+                        await UniTask.Delay((int)(RetryIntervalSeconds * 1000), cancellationToken: token);
                     }
-                    catch (TaskCanceledException)
+                    catch (OperationCanceledException)
                     {
                         return false;
                     }
@@ -55,18 +61,18 @@ namespace CoffeeBean
             return false;
         }
 
-        private async Task<bool> TryUpdateOnce(IProgress<float> progress, CancellationToken token)
+        private async UniTask<bool> TryUpdateOnce(IProgress<float> progress, CancellationToken token)
         {
             try
             {
                 // 1. 初始化
                 var initHandle = Addressables.InitializeAsync();
-                await initHandle.Task.ConfigureAwait(false);
+                await initHandle.ToUniTask();
                 if (initHandle.Status != AsyncOperationStatus.Succeeded) return false;
 
                 // 2. 检测更新
                 var checkHandle = Addressables.CheckForCatalogUpdates(false);
-                await checkHandle.Task.ConfigureAwait(false);
+                await checkHandle.ToUniTask();
                 if (checkHandle.Status != AsyncOperationStatus.Succeeded) return false;
 
                 if (checkHandle.Result == null || checkHandle.Result.Count == 0)
@@ -77,7 +83,7 @@ namespace CoffeeBean
 
                 // 3. 更新 catalog
                 var updateHandle = Addressables.UpdateCatalogs(checkHandle.Result, AutoReleaseHandle);
-                await updateHandle.Task.ConfigureAwait(false);
+                await updateHandle.ToUniTask();
                 if (updateHandle.Status != AsyncOperationStatus.Succeeded) return false;
 
                 // 4. 计算总下载大小
@@ -88,7 +94,7 @@ namespace CoffeeBean
                     foreach (var locator in locators)
                     {
                         if (token.IsCancellationRequested) return false;
-                        totalSize += await GetDownloadSize(locator, token).ConfigureAwait(false);
+                        totalSize += await GetDownloadSize(locator, token);
                     }
                 }
 
@@ -100,7 +106,7 @@ namespace CoffeeBean
 
                 // 5. 下载全部
                 CLog.Info(Tag, $"开始下载资源，总大小 {FormatSize(totalSize)}");
-                bool downloaded = await DownloadAll(locators, progress, token).ConfigureAwait(false);
+                bool downloaded = await DownloadAll(locators, progress, token);
                 return downloaded;
             }
             catch (Exception e)
@@ -110,17 +116,17 @@ namespace CoffeeBean
             }
         }
 
-        private static async Task<long> GetDownloadSize(IResourceLocator locator, CancellationToken token)
+        private static async UniTask<long> GetDownloadSize(IResourceLocator locator, CancellationToken token)
         {
             var keys = new List<object>();
             keys.AddRange(locator.Keys);
             var sizeHandle = Addressables.GetDownloadSizeAsync(keys.GetEnumerator());
-            await sizeHandle.Task.ConfigureAwait(false);
+            await sizeHandle.ToUniTask();
             if (sizeHandle.Status != AsyncOperationStatus.Succeeded) return 0;
             return sizeHandle.Result;
         }
 
-        private static async Task<bool> DownloadAll(List<IResourceLocator> locators, IProgress<float> progress, CancellationToken token)
+        private static async UniTask<bool> DownloadAll(List<IResourceLocator> locators, IProgress<float> progress, CancellationToken token)
         {
             long totalDownloaded = 0;
             long totalSize = 0;
@@ -128,7 +134,7 @@ namespace CoffeeBean
             // 先算总大小（进度分母）
             foreach (var locator in locators)
             {
-                totalSize += await GetDownloadSize(locator, token).ConfigureAwait(false);
+                totalSize += await GetDownloadSize(locator, token);
             }
             if (totalSize <= 0) totalSize = 1;
 
@@ -153,7 +159,8 @@ namespace CoffeeBean
                         return false;
                     }
                     progress?.Report(downloadHandle.PercentComplete);
-                    await Task.Yield();
+                    // UniTask.Yield 默认 Update 时机 → 天然回主线程，不需要配 Anything
+                    await UniTask.Yield(token);
                 }
 
                 if (downloadHandle.Status != AsyncOperationStatus.Succeeded)

@@ -5,6 +5,8 @@
     "CoffeeBean.Tools",
     "CoffeeBean.Asset",
     "CoffeeBean.Asset.Editor",
+    "UniTask",
+    "UniTask.Addressables",
     "Unity.Addressables",
     "Unity.ResourceManager",
     "Unity.Addressables.Editor"
