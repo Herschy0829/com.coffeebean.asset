@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.1] - 2026-09-18
+
+### Fixed
+- **打包预检里"未解析 Profile 变量"整条检查是错的（全是假阳性）** —— 在真实工程上跑才发现：
+  第一次实测 794 个条目 / 77 个组报了 4 条"未解析"，逐条看下来**全都是 Addressables 的正常语法**：
+
+  | 值 | 真相 |
+  |---|---|
+  | `[UnityEditor.EditorUserBuildSettings.activeBuildTarget]` | **内联 C# 表达式**（合法语法） |
+  | `[UnityEngine.AddressableAssets.Addressables.BuildPath]/[BuildTarget]` | 引用另一个变量（合法） |
+  | `{UnityEngine.AddressableAssets.Addressables.RuntimePath}/[BuildTarget]` | `{...}` 是**构建期路径替换**（合法） |
+  | `ServerData/[BuildTarget]` | 引用变量（合法） |
+
+  更关键的是实测发现：**未定义的变量会被 Unity 静默吃掉** ——
+  `[NotDefinedVariable]/x` 经 `EvaluateString` 变成 `NotDefinedVariable/x`，方括号都没了。
+  所以原来那条"解析后残留方括号就算未解析"的判据从根上就不成立（既误报正常的，又漏掉真错的）。
+
+  新判据：抽出 `[...]` 里的内容 —— **是已定义变量 → 放行；含 `.` → 视为 C# 表达式放行；
+  其余裸标识符 → 报"疑似拼错的变量名"**。这条才真能抓 `[BuildTargt]`（少个 e）这类
+  编辑器不报错、真机上路径才错的坑。
+
+### Tests
+- `CAssetContentPreflightTests` 8 → 9：新增 `LegitProfileSyntax_IsNotFlagged`（上面四种合法语法
+  一条都不许报），并把原来的"未解析"用例改成 `UndefinedVariableName_IsReported`（拼错变量名要报）。
+- asset 测试 50 → 51；全量 EditMode **719**（718 通过 + 1 有意跳过）。
+
 ## [0.6.0] - 2026-09-18
 
 ### Added

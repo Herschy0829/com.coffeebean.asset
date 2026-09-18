@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.AddressableAssets.Settings;
-using UnityEditor.AddressableAssets.Settings.GroupSchemas;
 
 namespace CoffeeBean.EditorTools
 {
@@ -18,6 +18,15 @@ namespace CoffeeBean.EditorTools
         public bool AssetExists;
     }
 
+    /// <summary>
+    /// 一个 Profile 变量的最小快照（名字 + **原始值**，原始值里才有 <c>[变量]</c> / <c>{路径}</c> 语法）。
+    /// </summary>
+    public struct CAssetProfileValueRecord
+    {
+        public string Name;
+        public string RawValue;
+    }
+
     /// <summary>打包预检结果。</summary>
     public sealed class CAssetPreflightReport
     {
@@ -30,7 +39,7 @@ namespace CoffeeBean.EditorTools
         /// <summary>资源已不存在（条目是死的）—— 构建会报错的那类。</summary>
         public List<string> DeadEntries = new List<string>();
 
-        /// <summary>Profile 变量没解析出来（路径里还留着 <c>[Var]</c>）—— 构建失败的经典原因。</summary>
+        /// <summary>未定义的 Profile 变量名（会被 Unity **静默吃掉**，路径就错了 —— 见下方说明）。</summary>
         public List<string> UnresolvedProfileVariables = new List<string>();
 
         /// <summary>空 group（不致命，但通常是漏配地址的信号）。</summary>
@@ -50,7 +59,7 @@ namespace CoffeeBean.EditorTools
         public string Summary =>
             $"条目 {EntryCount} / 组 {GroupCount}；重复地址 {DuplicateAddresses.Count}、" +
             $"空地址 {EmptyAddresses.Count}、失效条目 {DeadEntries.Count}、" +
-            $"未解析 Profile 变量 {UnresolvedProfileVariables.Count}、空组 {EmptyGroups.Count}";
+            $"未定义 Profile 变量 {UnresolvedProfileVariables.Count}、空组 {EmptyGroups.Count}";
 
         /// <summary>多行明细（无问题时给一句"没发现问题"）。</summary>
         public string Details()
@@ -60,7 +69,7 @@ namespace CoffeeBean.EditorTools
             AppendList(sb, "重复地址", DuplicateAddresses);
             AppendList(sb, "空地址", EmptyAddresses);
             AppendList(sb, "失效条目（资源已不存在）", DeadEntries);
-            AppendList(sb, "未解析的 Profile 变量", UnresolvedProfileVariables);
+            AppendList(sb, "未定义的 Profile 变量", UnresolvedProfileVariables);
             AppendList(sb, "空 group", EmptyGroups);
             if (!HasProblems) sb.AppendLine("没有发现会让打包失败的问题。");
             return sb.ToString().TrimEnd();
@@ -91,7 +100,7 @@ namespace CoffeeBean.EditorTools
     {
         /// <summary>纯逻辑评估（单测入口）。</summary>
         public static CAssetPreflightReport Evaluate(IEnumerable<CAssetEntryRecord> entries,
-            IEnumerable<string> groupNames, IEnumerable<string> resolvedProfileStrings)
+            IEnumerable<string> groupNames, IEnumerable<CAssetProfileValueRecord> profileValues)
         {
             var report = new CAssetPreflightReport();
             var seenAddresses = new Dictionary<string, string>(); // address → 第一次出现的 group
@@ -140,20 +149,50 @@ namespace CoffeeBean.EditorTools
                 if (kv.Value == 0) report.EmptyGroups.Add(kv.Key);
             }
 
-            if (resolvedProfileStrings != null)
-            {
-                foreach (string text in resolvedProfileStrings)
-                {
-                    if (string.IsNullOrEmpty(text)) continue;
-                    if (text.IndexOf('[') >= 0 || text.IndexOf(']') >= 0)
-                    {
-                        report.UnresolvedProfileVariables.Add(text);
-                    }
-                }
-            }
-
+            CheckProfileValues(profileValues, report);
             return report;
         }
+
+        /// <summary>
+        /// 检查 Profile 变量里引用的变量名是否都存在。
+        ///
+        /// **为什么不能用"解析后残留方括号"来判断**（实测过）：Addressables 里 <c>[...]</c> 是正常语法，
+        /// 既能引用变量（<c>[BuildTarget]</c>）也能写内联 C# 表达式
+        /// （<c>[UnityEditor.EditorUserBuildSettings.activeBuildTarget]</c>），而 <c>{...}</c> 是构建期路径替换；
+        /// 更坑的是**未定义的变量会被静默吃掉** —— <c>[NotDefinedVariable]/x</c> 解析成 <c>NotDefinedVariable/x</c>，
+        /// 方括号都没了，路径却是错的（只有真机构建/加载时才炸）。
+        ///
+        /// 所以判据是：抽出 <c>[...]</c> 里的内容，**是已定义变量 → 放行；含 '.' → 视为 C# 表达式放行；
+        /// 其余裸标识符 → 疑似拼错的变量名**。
+        /// </summary>
+        private static void CheckProfileValues(IEnumerable<CAssetProfileValueRecord> profileValues,
+            CAssetPreflightReport report)
+        {
+            if (profileValues == null) return;
+
+            var records = new List<CAssetProfileValueRecord>(profileValues);
+            var defined = new HashSet<string>();
+            foreach (CAssetProfileValueRecord record in records)
+            {
+                if (!string.IsNullOrEmpty(record.Name)) defined.Add(record.Name);
+            }
+
+            foreach (CAssetProfileValueRecord record in records)
+            {
+                if (string.IsNullOrEmpty(record.RawValue)) continue;
+                foreach (Match match in ProfileTokenRegex.Matches(record.RawValue))
+                {
+                    string token = match.Groups[1].Value.Trim();
+                    if (token.Length == 0) continue;
+                    if (defined.Contains(token)) continue;          // 正常引用其它变量
+                    if (token.IndexOf('.') >= 0) continue;          // 内联 C# 表达式
+
+                    report.UnresolvedProfileVariables.Add($"变量 {record.Name} = {record.RawValue} → 未定义的 [{token}]");
+                }
+            }
+        }
+
+        private static readonly Regex ProfileTokenRegex = new Regex(@"\[([^\[\]]+)\]", RegexOptions.Compiled);
 
         /// <summary>对当前工程的 Addressables 设置跑一遍预检。</summary>
         public static CAssetPreflightReport Run(AddressableAssetSettings settings)
@@ -185,20 +224,20 @@ namespace CoffeeBean.EditorTools
                 }
             }
 
-            // Profile 变量：变量值 / bundle 路径解析后不该再残留 [变量]
-            return Evaluate(entries, groupNames, CollectProfileStrings(settings));
+            // Profile 变量：检查 [变量] 引用是否都存在（未定义的会被静默吃掉，路径就错了）
+            return Evaluate(entries, groupNames, CollectProfileValues(settings));
         }
 
         /// <summary>
-        /// 收集"会被写进 catalog 的路径字符串"，用于发现未解析的 Profile 变量。
+        /// 收集所有 Profile 变量的**原始值**。
         ///
-        /// 2.x 里 group 本身没有 BuildPath/LoadPath（1.x 有），路径挂在
-        /// <see cref="BundledAssetGroupSchema"/> 上，类型是 <see cref="ProfileValueReference"/>。
-        /// 变量之间可以相互引用，所以变量**值**本身也要查一遍：嵌了没定义的变量同样会残留 []。
+        /// 只收变量就够：组的 bundle 路径（2.x 挂在 <see cref="BundledAssetGroupSchema"/> 上的
+        /// <c>ProfileValueReference</c>）本身只是"引用哪个变量"，真正带 <c>[...]</c> / <c>{...}</c> 语法的
+        /// 是变量值。所以查变量值即可覆盖 group 路径里的变量引用。
         /// </summary>
-        private static List<string> CollectProfileStrings(AddressableAssetSettings settings)
+        private static List<CAssetProfileValueRecord> CollectProfileValues(AddressableAssetSettings settings)
         {
-            var result = new List<string>();
+            var result = new List<CAssetProfileValueRecord>();
             AddressableAssetProfileSettings profile = settings.profileSettings;
             if (profile == null) return result;
 
@@ -207,24 +246,16 @@ namespace CoffeeBean.EditorTools
                 List<string> names = profile.GetVariableNames();
                 for (int i = 0; i < names.Count; i++)
                 {
-                    string raw = profile.GetValueByName(settings.activeProfileId, names[i]);
-                    if (!string.IsNullOrEmpty(raw)) result.Add($"变量 {names[i]} = {raw}");
+                    result.Add(new CAssetProfileValueRecord
+                    {
+                        Name = names[i],
+                        RawValue = profile.GetValueByName(settings.activeProfileId, names[i]),
+                    });
                 }
             }
             catch
             {
                 // 拿不到变量列表不该让预检整体失败
-            }
-
-            foreach (AddressableAssetGroup group in settings.groups)
-            {
-                if (group == null) continue;
-                foreach (AddressableAssetGroupSchema schema in group.Schemas)
-                {
-                    if (!(schema is BundledAssetGroupSchema bundled)) continue;
-                    result.Add($"{group.Name}.BuildPath = {bundled.BuildPath.GetValue(settings)}");
-                    result.Add($"{group.Name}.LoadPath = {bundled.LoadPath.GetValue(settings)}");
-                }
             }
             return result;
         }

@@ -19,6 +19,11 @@ namespace CoffeeBean.Asset.Tests
             return new CAssetEntryRecord { Address = address, AssetPath = path, GroupName = group, AssetExists = exists };
         }
 
+        private static CAssetProfileValueRecord Profile(string name, string raw)
+        {
+            return new CAssetProfileValueRecord { Name = name, RawValue = raw };
+        }
+
         [Test]
         public void HealthyProject_ReportsNoProblems()
         {
@@ -27,12 +32,56 @@ namespace CoffeeBean.Asset.Tests
                 Entry("UI/A", "Assets/A.prefab"),
                 Entry("UI/B", "Assets/B.prefab"),
             };
-            var report = CAssetContentPreflight.Evaluate(entries, new[] { "G" }, new[] { "ServerData/Android" });
+            var report = CAssetContentPreflight.Evaluate(entries, new[] { "G" },
+                new[] { Profile("BuildTarget", "Android") });
 
             Assert.IsFalse(report.HasProblems);
             Assert.AreEqual(2, report.EntryCount);
             Assert.AreEqual(1, report.GroupCount);
             StringAssert.Contains("没有发现", report.Details());
+        }
+
+        /// <summary>
+        /// Addressables 里 <c>[...]</c> 是**正常语法**：既引用变量，也能写内联 C# 表达式；
+        /// <c>{...}</c> 是构建期路径替换。这些都不该被当成"未解析变量"报出来
+        /// （第一版就是靠"残留方括号"判断的，结果在真实工程上全是假阳性）。
+        /// </summary>
+        [Test]
+        public void LegitProfileSyntax_IsNotFlagged()
+        {
+            var values = new[]
+            {
+                Profile("BuildTarget", "[UnityEditor.EditorUserBuildSettings.activeBuildTarget]"), // 内联 C# 表达式
+                Profile("Local.BuildPath", "[UnityEngine.AddressableAssets.Addressables.BuildPath]/[BuildTarget]"),
+                Profile("Local.LoadPath", "{UnityEngine.AddressableAssets.Addressables.RuntimePath}/[BuildTarget]"),
+                Profile("Remote.BuildPath", "ServerData/[BuildTarget]"),
+            };
+            var report = CAssetContentPreflight.Evaluate(new List<CAssetEntryRecord>(), new[] { "G" }, values);
+
+            Assert.IsEmpty(report.UnresolvedProfileVariables, "正常语法被误报了：" + string.Join(" | ", report.UnresolvedProfileVariables));
+            Assert.IsFalse(report.HasProblems);
+        }
+
+        /// <summary>
+        /// 拼错的变量名会被 Unity **静默吃掉**（实测：<c>[NotDefinedVariable]/x</c> 解析成
+        /// <c>NotDefinedVariable/x</c>，方括号都没了）—— 路径是错的，但编辑器里不报错。
+        /// 这才是真正要抓的：裸标识符且不是已定义变量。
+        /// </summary>
+        [Test]
+        public void UndefinedVariableName_IsReported()
+        {
+            var report = CAssetContentPreflight.Evaluate(
+                new List<CAssetEntryRecord>(), new[] { "G" },
+                new[]
+                {
+                    Profile("BuildTarget", "Android"),
+                    Profile("Remote.BuildPath", "ServerData/[BuildTargt]"), // 少个 e
+                });
+
+            Assert.AreEqual(1, report.UnresolvedProfileVariables.Count);
+            StringAssert.Contains("BuildTargt", report.UnresolvedProfileVariables[0]);
+            StringAssert.Contains("Remote.BuildPath", report.UnresolvedProfileVariables[0]);
+            Assert.IsTrue(report.HasProblems);
         }
 
         [Test]
@@ -70,18 +119,6 @@ namespace CoffeeBean.Asset.Tests
 
             Assert.AreEqual(1, report.DeadEntries.Count);
             Assert.IsTrue(report.HasProblems);
-        }
-
-        [Test]
-        public void UnresolvedProfileVariable_IsReported()
-        {
-            // BuildPath/LoadPath 解析后还留着 [Var] → 构建失败的经典原因
-            var report = CAssetContentPreflight.Evaluate(
-                new List<CAssetEntryRecord>(), new[] { "G" },
-                new[] { "[BuildTarget]/ServerData", "ServerData/Android" });
-
-            Assert.AreEqual(1, report.UnresolvedProfileVariables.Count);
-            StringAssert.Contains("[BuildTarget]", report.UnresolvedProfileVariables[0]);
         }
 
         [Test]
