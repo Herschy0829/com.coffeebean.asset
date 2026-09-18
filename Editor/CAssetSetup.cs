@@ -1,5 +1,7 @@
+using System;
 using UnityEditor;
 using UnityEditor.AddressableAssets;
+using UnityEditor.AddressableAssets.Build;
 using UnityEditor.AddressableAssets.Build.DataBuilders;
 using UnityEditor.AddressableAssets.Settings;
 using UnityEngine;
@@ -59,22 +61,81 @@ namespace CoffeeBean.EditorTools
         /// <returns>true = 这次真的切换了；false = 本来就是该模式 / 未找到该模式（未做改动）。</returns>
         public static bool SetPlayModeUseAssetDatabase()
         {
+            return SetPlayMode<BuildScriptFastMode>();
+        }
+
+        /// <summary>
+        /// 切到 **Use Existing Build**（BuildScriptPackedPlayMode）：读**真实构建产物**，
+        /// 与真机行为一致 —— 这是"验证资源是否真的能打进包"的正解（需先构建过内容）。
+        /// </summary>
+        /// <returns>true = 这次真的切换了。</returns>
+        public static bool SetPlayModeExistingBuild()
+        {
+            return SetPlayMode<BuildScriptPackedPlayMode>();
+        }
+
+        /// <summary>切到 FastMode（等价于 <see cref="SetPlayModeUseAssetDatabase"/>，名字更直白）。</summary>
+        public static bool SetPlayModeFast()
+        {
+            return SetPlayMode<BuildScriptFastMode>();
+        }
+
+        private static bool SetPlayMode<TBuilder>() where TBuilder : ScriptableObject
+        {
             EnsureSettings();
             AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
             if (settings == null || settings.DataBuilders == null) return false;
 
             for (int i = 0; i < settings.DataBuilders.Count; i++)
             {
-                if (!(settings.DataBuilders[i] is BuildScriptFastMode)) continue;
+                if (!(settings.DataBuilders[i] is TBuilder)) continue;
                 if (settings.ActivePlayModeDataBuilderIndex == i) return false; // 已经是了
 
                 settings.ActivePlayModeDataBuilderIndex = i;
                 AssetDatabase.SaveAssets();
                 // DataBuilders[i] 是 ScriptableObject（不是 IDataBuilder），名字用 Object.name
-                Debug.Log($"[{Tag}] 播放模式已切换为 Use Asset Database（{settings.DataBuilders[i].name}）");
+                Debug.Log($"[{Tag}] 播放模式已切换为 {settings.DataBuilders[i].name}");
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// 构建 Addressables 内容（等价于官方菜单 <c>Groups → Build → New Build</c>）。
+        ///
+        /// **同步阻塞** —— Unity 的 Addressables 构建本身就是同步的，官方菜单也一样会卡住编辑器。
+        /// 产出 catalog + bundle；构建完成后切到 Use Existing Build 即可在编辑器里按真机方式验证。
+        /// </summary>
+        /// <param name="summary">给界面/日志看的一句话结果。</param>
+        /// <returns>true = 构建成功（无 Error）。</returns>
+        public static bool BuildContent(out string summary)
+        {
+            EnsureSettings();
+            AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                summary = "没有 AddressableAssetSettings，无法构建。";
+                return false;
+            }
+
+            try
+            {
+                AddressableAssetSettings.BuildPlayerContent(out AddressablesPlayerBuildResult result);
+                bool ok = result != null && string.IsNullOrEmpty(result.Error);
+                summary = ok
+                    ? $"构建成功：{result.LocationCount} 个 location，耗时 {result.Duration:F1} 秒；输出 {result.OutputPath}"
+                    : $"构建失败：{(result == null ? "构建未返回结果" : result.Error)}";
+
+                if (ok) Debug.Log($"[{Tag}] {summary}");
+                else Debug.LogError($"[{Tag}] {summary}");
+                return ok;
+            }
+            catch (Exception e)
+            {
+                summary = "构建抛出异常：" + e.Message;
+                Debug.LogError($"[{Tag}] {summary}\n{e}");
+                return false;
+            }
         }
 
         /// <summary>当前播放模式名（拿不到时返回 "（无）"）。</summary>

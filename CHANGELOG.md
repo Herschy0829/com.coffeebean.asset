@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.6.0] - 2026-09-18
+
+### Added
+- **「Addressables 设置」面板补上"打包验证"三段**：默认播放模式是
+  `Use Asset Database (fastest)`，编辑器里读的是 AssetDatabase、**不经过 bundle 打包** ——
+  所以"在编辑器里跑一遍"**证明不了**资源打得进包。现在面板按三层递进给齐手段：
+
+  1. **播放模式一键切换**（`FastMode` ⇄ `Use Existing Build`）：
+     前者日常开发最快、不校验打包；后者读**真实构建产物**，与真机一致。切过去时提示"需先构建内容"。
+     **注意：Addressables 2.x 已经没有 "Simulate Groups (advanced)" 这个播放模式脚本了**
+     （只有 `FastMode` / `PackedPlayMode` / `PackedMode`），网上老教程里的那一档在你版本里不存在。
+  2. **打包预检**（`CAssetContentPreflight`，**不构建、秒级**）抓"编辑器能跑、打包才炸"的配置问题：
+     - 重复 address（catalog 里后者覆盖前者，只在运行期 LogError）；
+     - address 为空的条目；
+     - **失效条目**（资源已删但条目还留在 group 里 —— 构建直接报错）；
+     - **未解析的 Profile 变量**（变量值 / bundle 的 BuildPath·LoadPath 里还残留 `[Var]`）；
+     - 空 group（提示级，通常是漏配地址的信号）。
+     结果按类目列出（每类最多 20 条明细），一键打 Console。
+  3. **一键 Build Content（New Build）** + 结果报告（`LocationCount` / `Duration` / `OutputPath` / `Error`）。
+     构建是**同步阻塞**的（Unity 官方菜单也一样），所以先弹确认框说明；构建完切到
+     `Use Existing Build` 就能在编辑器里按真机方式验证。
+  4. 快捷入口：一键打开 Unity 自带的 **Analyze 窗口**（Bundle Layout Preview、Check Bundle Dupe
+     Dependencies 等规则，不重复造轮子）与 **Groups 窗口**。
+
+### Notes
+- Addressables 2.9.1 的 `AddressableAssetBuildResult` **没有 `Warnings` 字段**（只有
+  `Error` / `LocationCount` / `Duration` / `OutputPath` / `FileRegistry`），报告按实际字段写。
+- 2.x 里 group 本身没有 `BuildPath`/`LoadPath`（1.x 有），路径挂在 `BundledAssetGroupSchema`
+  的 `ProfileValueReference` 上 —— 预检按 2.x 的 API 取。
+
+### Tests
+- 新增 `CAssetContentPreflightTests`（8 条，纯逻辑喂记录、不碰工程设置）：
+  健康工程无问题、重复地址带两组名、空地址、失效条目、未解析变量、空组只算提示、
+  null 输入不抛、明细截断（不刷爆 Console/面板）。
+- asset 测试 42 → 50；全量 EditMode **710 → 718**（717 通过 + 1 有意跳过）。
+
 ## [0.5.0] - 2026-09-18
 
 ### Fixed（都是"点了没反应"的真实成因）
