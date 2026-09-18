@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.7.0] - 2026-09-18
+
+### Added
+- **编辑器路径兜底（新增资源不用再手工加进 Addressables group）**。
+  需求原话："不想在 editor 每新增一个资源就把它添加进 group，编辑器下 fast 应该可以直接读文件夹"。
+  先说清楚机制：**FastMode 做不到这件事** —— 它只是把"从 bundle 读"换成"从 AssetDatabase 读"，
+  `key → 资源` 仍然要走 catalog（运行时按 group 现建）。真正"按路径读"是这一版加的：
+
+  ```
+  CAssetSystem.LoadAssetAsync<T>(address)
+    → 查 catalog（正常路径，与真机一致）
+    → 查不到：编辑器按「忽略扩展名的路径后缀」在 Assets 下找资源，AssetDatabase 直读
+    → 命中：记进兜底清单 + 打一次 Warning；正式构建里这段代码不存在
+  ```
+
+  - `CAssetOptions.EditorPathFallback`（默认 **true**）、`EditorPathFallbackRoots`（默认 `Assets`）。
+    地址支持 `Building/Building_1002` 这种"路径形状"，能命中
+    `Assets/Art/Building/Building_1002.prefab`；也接受 `Assets/...` 完整路径。
+  - **代价写在脸上**：靠兜底才加载成功的地址，**打包后一定失败**（player 里没有这段代码）。
+    所以 `CAssetEditorPathFallback.Recorded` 会记录每一次兜底（**持久化到 EditorPrefs，
+    活过进出 Play 模式的域重载**），Hub 的「Addressables 设置」面板新增
+    **「编辑器路径兜底清单」**区块：列出地址 → 实际路径，可打到 Console / 复制 / 核对后清空。
+  - 关掉开关（`EditorPathFallback = false`）就退回原行为：catalog 里没有就老老实实返回 null。
+
+- `Tests/CAssetEditorPathFallbackTests`（9 条）：部分路径命中 / 完整路径命中 / 未知地址不命中 /
+  类型不符不命中 / null 不命中 / 清单去重与持久化 / 与 `CAssetSystem` 联动（catalog 未命中→兜底并记录）/
+  关掉开关时不兜底也不记录 / 同步 API 同样有兜底。
+
+### Fixed（顺带关掉一个可能毁配置的风险）
+- **`CAssetSetup.EnsureSettings()` 加三条防线**。它原来挂在 `[InitializeOnLoad]` 上、判据是
+  "`Settings == null` 就创建"，而 `AddressableAssetSettings.Create()` 会**覆写同名资源**。
+  在"包更新 → 全量重导入"那种窗口期里，`Settings` 与 `LoadAssetAtPath` 都可能瞬时为 null ——
+  于是它有把工程里已有的 Addressables 设置（连同一大串 group 引用）覆盖掉的风险。
+  现在：**磁盘上文件存在就绝不创建**（用 `File.Exists` 判断，不看加载结果）、
+  **正在导入/编译时直接跳过**、只有文件真的不存在时才创建。
+  （这次工程里 77 个 group 在磁盘上消失是否由此引起尚未定论，但这个风险必须先关掉。）
+
+### Tests
+- asset 测试 51 → 60；全量 EditMode **725 → 734**（733 通过 + 1 有意跳过）。
+
 ## [0.6.1] - 2026-09-18
 
 ### Fixed

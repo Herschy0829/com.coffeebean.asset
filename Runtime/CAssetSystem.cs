@@ -154,6 +154,11 @@ namespace CoffeeBean
 
             if (!_backend.HasAddress(address))
             {
+                if (TryEditorPathFallback(address, out T fallback, out _))
+                {
+                    CacheAsset(address, fallback);
+                    return fallback;
+                }
                 LogFail($"未找到资源：{address}");
                 return null;
             }
@@ -161,6 +166,11 @@ namespace CoffeeBean
             var asset = _backend.LoadAssetSync<T>(address);
             if (asset == null)
             {
+                if (TryEditorPathFallback(address, out T fallback, out _))
+                {
+                    CacheAsset(address, fallback);
+                    return fallback;
+                }
                 LogFail($"同步加载失败：{address}");
                 return null;
             }
@@ -186,6 +196,11 @@ namespace CoffeeBean
             bool exists = await _backend.HasAddressAsync(address);
             if (!exists)
             {
+                if (TryEditorPathFallback(address, out T fallback, out _))
+                {
+                    CacheAsset(address, fallback);
+                    return fallback;
+                }
                 LogFail($"未找到资源：{address}");
                 return null;
             }
@@ -196,12 +211,42 @@ namespace CoffeeBean
             await UniTask.SwitchToMainThread();
             if (asset == null)
             {
+                if (TryEditorPathFallback(address, out T fallback, out _))
+                {
+                    CacheAsset(address, fallback);
+                    return fallback;
+                }
                 LogFail($"异步加载失败：{address}");
                 return null;
             }
 
             CacheAsset(address, asset);
             return asset;
+        }
+
+        /// <summary>
+        /// 编辑器路径兜底：catalog 里没有这个地址时，按资源路径直接从 AssetDatabase 读。
+        ///
+        /// **只在编辑器编译**（`#if UNITY_EDITOR`）—— player 构建里根本没有这段代码，
+        /// 所以"靠兜底才活"的地址在真机上一定失败；这也是兜底清单必须存在的原因。
+        /// </summary>
+        private bool TryEditorPathFallback<T>(string address, out T asset, out string resolvedPath) where T : Object
+        {
+            asset = null;
+            resolvedPath = null;
+#if UNITY_EDITOR
+            if (_options == null || !_options.EditorPathFallback) return false;
+
+            CAssetEditorPathFallback.Enabled = true;
+            CAssetEditorPathFallback.Roots = _options.EditorPathFallbackRoots;
+
+            if (!CAssetEditorPathFallback.TryLoad(address, out asset, out resolvedPath)) return false;
+
+            CAssetEditorPathFallback.Report(address, resolvedPath);
+            return true;
+#else
+            return false;
+#endif
         }
 
         // ========== 标签 / 批量 ==========

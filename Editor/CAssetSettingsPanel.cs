@@ -27,6 +27,7 @@ namespace CoffeeBean.EditorTools
         private static bool _lastOk = true;
         private static CAssetPreflightReport _lastReport;
         private static string _lastBuildSummary = string.Empty;
+        private static Vector2 _fallbackScroll;
 
         /// <summary>Hub 调用它画面板；<paramref name="requestRepaint"/> 用于动作结束后刷新。</summary>
         public static void DrawTool(Action requestRepaint)
@@ -37,6 +38,8 @@ namespace CoffeeBean.EditorTools
             DrawStateSection(settings, exists);
             EditorGUILayout.Space(10);
             DrawPlayModeSection(settings, exists, requestRepaint);
+            EditorGUILayout.Space(10);
+            DrawEditorFallbackSection(requestRepaint);
             EditorGUILayout.Space(10);
             DrawPreflightSection(settings, exists, requestRepaint);
             EditorGUILayout.Space(10);
@@ -108,6 +111,51 @@ namespace CoffeeBean.EditorTools
             }
             EditorGUI.EndDisabledGroup();
             EditorGUILayout.EndHorizontal();
+        }
+
+        // ========== 编辑器兜底清单 ==========
+
+        private static void DrawEditorFallbackSection(Action requestRepaint)
+        {
+            int count = CAssetEditorPathFallback.Recorded.Count;
+            EditorGUILayout.LabelField($"编辑器路径兜底清单（{count}）", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(
+                "迭代期新增的资源不用手工加进 group：地址在 catalog 里查不到时，编辑器会按资源路径直接读。" +
+                "但**靠兜底才加载成功的地址，打包后一定失败** —— 出包前照着这份清单核对（或把它们加进 group）。",
+                EditorStyles.wordWrappedMiniLabel);
+
+            if (count == 0)
+            {
+                EditorGUILayout.LabelField("（还没有地址走过兜底）", EditorStyles.miniLabel);
+                return;
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("打到 Console", GUILayout.Width(100)))
+            {
+                Debug.Log("[CoffeeBean.Asset] " + CAssetEditorPathFallback.DescribeRecorded());
+            }
+            if (GUILayout.Button("复制到剪贴板", GUILayout.Width(110)))
+            {
+                EditorGUIUtility.systemCopyBuffer = CAssetEditorPathFallback.DescribeRecorded();
+            }
+            if (GUILayout.Button("已核对，清空", GUILayout.Width(110)))
+            {
+                CAssetEditorPathFallback.ClearRecorded();
+                _lastResult = "已清空编辑器兜底清单。";
+                _lastOk = true;
+                requestRepaint?.Invoke();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            _fallbackScroll = EditorGUILayout.BeginScrollView(_fallbackScroll, GUILayout.MaxHeight(140));
+            int shown = 0;
+            foreach (System.Collections.Generic.KeyValuePair<string, string> kv in CAssetEditorPathFallback.Recorded)
+            {
+                if (shown++ >= 200) break;
+                EditorGUILayout.LabelField($"\"{kv.Key}\"  →  {kv.Value}", EditorStyles.miniLabel);
+            }
+            EditorGUILayout.EndScrollView();
         }
 
         // ========== 打包预检 ==========
