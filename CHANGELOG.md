@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.5.0] - 2026-09-18
+
+### Fixed（都是"点了没反应"的真实成因）
+
+- **「资源依赖分析」窗口自己把自己卡死** —— 用户实测反馈"点按钮没反应"。
+
+  根因：反向引用扫描写在 `OnGUI` 里，对全工程资源逐个 `AssetDatabase.GetDependencies`。
+  实测该工程（5206 个资源、约 1.3 ms/项）**一次全量约 6.8 秒**，而 `OnGUI` 每帧至少跑
+  Layout + Repaint **两次**，改目标 / 敲过滤词还会重跑 —— 于是窗口一打开就永久停在扫描里，
+  连一帧都画不完，"定位"按钮自然永远不会响应。
+
+  改法：把扫描抽成新的 **`CAssetReferenceScanner`**（与 GUI 解耦、可单测），**分帧增量**执行：
+  - 每帧只花一段预算（默认 10 ms，挂在 `EditorApplication.update` 上，**不再走 OnGUI**）；
+  - 有进度条、可**取消**、结果**边扫边出**；
+  - 同一目标结果复用（用 `GetAssetDependencyHash` 作失效键），不再每帧重扫；
+  - 正向依赖 = 一次 `GetDependencies`，即时出；只有反向引用才需要扫描。
+
+- **「Addressables 设置」两个按钮在工程已配置好时静默空转**：`EnsureSettings()` 与
+  `SetPlayModeUseAssetDatabase()` 遇到"已经是我要的状态"就直接 `return`，界面和 Console 都没有任何变化
+  —— 实测该工程正好处于这个状态（设置已存在、播放模式已是 Use Asset Database），两个按钮点了必然"没反应"。
+  现在两个方法**返回"这次到底改了什么"**（`bool`）并打日志，界面据此显示结果。
+
+### Changed
+- **「Addressables 设置」从独立窗口改为 Hub 内嵌面板**（`CAssetSettingsPanel`，用框架的内嵌面板机制）：
+  原来在 Hub 里点导航只是"选中"，还要在右侧卡片上再点一次「打开」才弹窗口 —— 两步，
+  而且第一步看起来像没反应。现在一次点击就在 Hub 内容区看到状态与按钮。
+  删除 `CAssetSettingsWindow`（功能全部搬进面板，保留独立窗口没有意义）。
+- 面板里**无事可做时按钮直接置灰并写明原因**："创建 Addressable 设置（已存在，无需创建）"、
+  "切换为 Use Asset Database（已是该模式，无需切换）" —— 置灰 + 原因，比"能点但没反应"清楚得多。
+- 状态行常显：设置是否存在 / 当前播放模式名 / 是否已是编辑器直读（绿=正常，橙=需注意）。
+- **「资源依赖分析」自动跟随 Project 选中**（可关掉，选择记进 EditorPrefs）：
+  打开窗口时若已选中资源就直接出结果，不用再手动拖进去。
+
+### Tests
+- 新增 `CAssetReferenceScannerTests`（8 条）：真的能扫出引用者、正向依赖正确、
+  **单次 `Step` 不会扫完**（分帧的保证）、同目标复用结果、取消保留部分结果、
+  Assets 之外的路径立即结束、内嵌面板契约。
+- 新增 `CAssetSetupTests`（3 条）：`EnsureSettings` 幂等且第二次报"无改动"、
+  播放模式描述与判定自洽、切换后第二次报"无改动"（并**恢复原值**，不污染工程）。
+- asset 测试 31 → 42；全量 EditMode **699 → 710**。
+
 ## [0.4.0] - 2026-09-17
 
 ### Changed (BREAKING：异步返回类型 Task → UniTask)

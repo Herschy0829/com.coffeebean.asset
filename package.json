@@ -1,6 +1,6 @@
 {
   "name": "com.coffeebean.asset",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "displayName": "CoffeeBean Asset",
   "description": "Asset management module for the CoffeeBean framework: unified loading facade over Unity Addressables (sync/async/instantiate/preload/label/ref-counted release/stats) + UI component binding extensions (Image/TMP_Text/Text/SpriteRenderer/AudioClip) + catalog update service. Async is built on UniTask (pooled awaiters, main-thread resumption, cancellation). Declares com.unity.addressables and com.cysharp.unitask as dependencies (sources provided by the consumer). Depends on com.coffeebean.tools.",
   "unity": "6000.0",
